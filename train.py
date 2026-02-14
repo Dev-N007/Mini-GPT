@@ -1,6 +1,10 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import os
+import time
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from config import GPT2Config
 from model.gpt2 import GPT2
@@ -8,11 +12,11 @@ from tokenizer import get_tokenizer
 from dataset import TextDataset
 from utils.init_weights import init_weights
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 config = GPT2Config()
 model = GPT2(config).to(device)
-
 model.apply(lambda m: init_weights(m, config.initializer_range))
 
 tokenizer = get_tokenizer()
@@ -23,17 +27,19 @@ loader = DataLoader(dataset, batch_size=16, shuffle=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
+os.makedirs("checkpoints", exist_ok=True)
+
+loss_history = []
+
 model.train()
 
-checkpoint = torch.load("checkpoints/gpt2_epoch_1.pt")
+epochs = 2
 
-model.load_state_dict(checkpoint["model_state_dict"])
-optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+for epoch in range(epochs):
+    epoch_loss = 0
+    progress_bar = tqdm(loader, desc=f"Epoch {epoch}")
 
-start_epoch = checkpoint["epoch"] + 1
-
-for epoch in range(start_epoch, 3):
-    for x, y in loader:
+    for x, y in progress_bar:
         x = x.to(device)
         y = y.to(device)
 
@@ -46,18 +52,33 @@ for epoch in range(start_epoch, 3):
 
         optimizer.zero_grad()
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
         optimizer.step()
 
-    print("Epoch:", epoch, "Loss:", loss.item())
-    import os
+        loss_value = loss.item()
+        loss_history.append(loss_value)
+        epoch_loss += loss_value
 
-    os.makedirs("checkpoints", exist_ok=True)
+        progress_bar.set_postfix(loss=loss_value)
+
+    avg_epoch_loss = epoch_loss / len(loader)
+    print(f"Epoch {epoch} Average Loss: {avg_epoch_loss:.4f}")
 
     torch.save({
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "loss": loss.item()
+        "loss": avg_epoch_loss,
+        "loss_history": loss_history
     }, f"checkpoints/gpt2_epoch_{epoch}.pt")
 
 torch.save(model.state_dict(), "checkpoints/gpt2_final.pt")
+
+plt.figure(figsize=(8,5))
+plt.plot(loss_history)
+plt.xlabel("Training Step")
+plt.ylabel("Loss")
+plt.title("Training Loss Curve")
+plt.show()
